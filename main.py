@@ -9,11 +9,6 @@ import pandas as pd
 from instruments import SECTORS
 
 
-@app.get("/sectors")
-def get_sectors():
-    return SECTORS
-
-
 # =============================
 # CONFIG
 # =============================
@@ -41,14 +36,20 @@ app.add_middleware(
 # =============================
 # DATA
 # =============================
-SECTORS = ["ALL", "BANKING", "IT", "PHARMA", "AUTO"]
 
-STOCKS = [
-    {"symbol": "NSE_EQ|HDFCBANK", "name": "HDFCBANK", "sector": "BANKING"},
-    {"symbol": "NSE_EQ|ICICIBANK", "name": "ICICIBANK", "sector": "BANKING"},
-    {"symbol": "NSE_EQ|INFY", "name": "INFY", "sector": "IT"},
-    {"symbol": "NSE_EQ|TCS", "name": "TCS", "sector": "IT"},
-]
+
+@app.get("/sectors")
+def get_sectors():
+    return SECTORS
+
+# SECTORS = ["ALL", "BANKING", "IT", "PHARMA", "AUTO"]
+
+# STOCKS = [
+ #   {"symbol": "NSE_EQ|HDFCBANK", "name": "HDFCBANK", "sector": "BANKING"},
+  #  {"symbol": "NSE_EQ|ICICIBANK", "name": "ICICIBANK", "sector": "BANKING"},
+   # {"symbol": "NSE_EQ|INFY", "name": "INFY", "sector": "IT"},
+   # {"symbol": "NSE_EQ|TCS", "name": "TCS", "sector": "IT"},
+# ]
 
 # =============================
 # HELPERS
