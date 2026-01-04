@@ -38,9 +38,14 @@ app.add_middleware(
 # =============================
 
 
-@app.get("/sectors")
-def get_sectors():
-    return SECTORS
+# @app.get("/sectors")
+# def get_sectors():
+#    return SECTORS
+
+@app.get("/screener")
+def screener(sector: str = "ALL"):
+    sector = sector.upper()
+    return SECTORS.get(sector, [])
 
 # SECTORS = ["ALL", "BANKING", "IT", "PHARMA", "AUTO"]
 
