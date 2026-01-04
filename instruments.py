@@ -37,11 +37,11 @@ STOCKS = [
     {"symbol": "NSE_EQ|SIEMENS", "name": "SIEMENS", "sector": "ENERGY"},
     {"symbol": "NSE_EQ|RELIANCE", "name": "RELIANCE", "sector": "ENERGY"},
 
-    {"symbol": "NSE_EQ|ADANIENT", "name": "ADANIENT", "sector": "METAL"},
-    {"symbol": "NSE_EQ|HINDALCO", "name": "HINDALCO", "sector": "METAL"},
-    {"symbol": "NSE_EQ|HINDCOPPER", "name": "HINDCOPPER", "sector": "METAL"},
-    {"symbol": "NSE_EQ|NATIONALUM", "name": "NATIONALUM", "sector": "METAL"},
-    {"symbol": "NSE_EQ|JSWSTEEL", "name": "JSWSTEEL", "sector": "METAL"},
+    {"symbol": "NSE_EQ|ADANIENT", "name": "ADANIENT", "sector": "METALS"},
+    {"symbol": "NSE_EQ|HINDALCO", "name": "HINDALCO", "sector": "METALS"},
+    {"symbol": "NSE_EQ|HINDCOPPER", "name": "HINDCOPPER", "sector": "METALS"},
+    {"symbol": "NSE_EQ|NATIONALUM", "name": "NATIONALUM", "sector": "METALS"},
+    {"symbol": "NSE_EQ|JSWSTEEL", "name": "JSWSTEEL", "sector": "METALS"},
 
     {"symbol": "NSE_EQ|DABUR", "name": "DABUR", "sector": "FMCG"},
     {"symbol": "NSE_EQ|GODREJCP", "name": "GODREJCP", "sector": "FMCG"},
