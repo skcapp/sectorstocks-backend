@@ -6,7 +6,7 @@ from upstox_client.api.history_api import HistoryApi
 from datetime import datetime, time
 import pandas as pd
 
-from backend.instruments import SECTORS
+from instruments import SECTORS
 
 
 # =============================
