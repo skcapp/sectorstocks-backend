@@ -110,7 +110,8 @@ def screener(sector: str = Query("ALL")):
             continue
 
         # 🔥 Breakout condition
-        if ltp > prev_high:
+        # if ltp > prev_high:
+        if ltp > prev_high * 0.995:
             results.append({
                 "symbol": symbol,
                 "name": stock["name"],
