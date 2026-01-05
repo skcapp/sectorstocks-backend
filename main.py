@@ -130,4 +130,10 @@ def screener(sector: str = Query("ALL")):
             print(f"{stock['name']} | LTP={ltp} | PREV_HIGH={prev_high}"
                   )
 
+            print("========== DEBUG START ==========")
+            print("SYMBOL:", symbol)
+            print("LTP:", ltp)
+            print("CANDLES:", candles[-3:] if candles else candles)
+            print("========== DEBUG END ==========")
+
     return results
