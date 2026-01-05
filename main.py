@@ -1,154 +1,134 @@
 from fastapi import FastAPI, Query
-import requests
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timedelta
+import pytz
 import os
-from datetime import datetime, time, timedelta
-from instruments import STOCKS, SECTORS
 
+from upstox_client import Configuration, ApiClient
+from upstox_client.apis import MarketQuoteApi, HistoryApi
+
+from instruments import STOCKS, SECTORS
 
 app = FastAPI()
 
+# ---------- CORS ----------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------- Upstox Setup ----------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
-HEADERS = {
-    "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}",
-    "Accept": "application/json"
-}
+if not UPSTOX_ACCESS_TOKEN:
+    raise RuntimeError("UPSTOX_ACCESS_TOKEN not set")
+
+config = Configuration()
+config.access_token = UPSTOX_ACCESS_TOKEN
+
+api_client = ApiClient(config)
+market_api = MarketQuoteApi(api_client)
+history_api = HistoryApi(api_client)
+
+IST = pytz.timezone("Asia/Kolkata")
 
 
-# ================= MARKET TIME CHECK =================
-
-
-def is_market_open():
-    # Convert UTC → IST
-    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
-    current_time = ist_now.time()
-
-    market_open = time(9, 15)
-    market_close = time(15, 30)
-
-    return market_open <= current_time <= market_close
-
-
-# ================= SECTORS =================
+# ---------- SECTORS ----------
 @app.get("/sectors")
 def get_sectors():
     return SECTORS
 
 
-# ================= BATCH LTP =================
-def get_all_ltps(symbols):
-    response = requests.get(
-        "https://api.upstox.com/v2/market-quote/ltp",
-        headers=HEADERS,
-        params=[("instruments[]", s) for s in symbols],
-        timeout=10
-    )
-
-    if response.status_code != 200:
-        return {}
-
-    return response.json().get("data", {})
-
-
-# ================= PREVIOUS 5-MIN HIGH =================
-def get_prev_5min_high(symbol):
-    response = requests.get(
-        "https://api.upstox.com/v2/historical-candle/intraday/5minute",
-        headers=HEADERS,
-        params={"instrument_key": symbol},
-        timeout=10
-    )
-
-    if response.status_code != 200:
-        return None
-
-   # candles = response.json().get("data", {}).get("candles", [])
-    candles = candle_response.data.candles
-
-    # Need at least 2 completed candles
-   # if len(candles) < 2:
-    if not candles or len(candles) < 2:
-        return None
-
-    # 🔥 FIX: use MAX HIGH of completed candles (exclude current forming candle)
-    # prev_high = max(c[2] for c in candles[:-1])
-
-    # PREVIOUS completed 5-min candle
-    prev_candle = candles[-2]
-    prev_high = float(prev_candle[2])
-
-    return prev_high
-
-
-# ================= SCREENER =================
-print("=== SCREENER HIT ===")
-print("Sector:", sector)
-
-
+# ---------- SCREENER ----------
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
-  #  if not is_market_open():
-   #     return [{"message": "Market closed"}]
+    print("=== SCREENER HIT ===")
+    print("Sector:", sector)
 
-    results = []
+    now = datetime.now(IST)
 
-    # Filter stocks by sector
-    filtered_stocks = [
+    # ---- Market hours check ----
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+    if not (market_open <= now <= market_close):
+        return [{"message": "Market closed"}]
+
+    # ---- Symbols to scan ----
+    scan_stocks = [
         s for s in STOCKS
         if sector == "ALL" or s["sector"] == sector
     ]
 
-    if not filtered_stocks:
+    if not scan_stocks:
         return []
 
-    symbols = [s["symbol"] for s in filtered_stocks]
+    symbols = [s["symbol"] for s in scan_stocks]
 
-    # 🔥 Batch LTP call
-    ltp_map = get_all_ltps(symbols)
+    # ---- Batch LTP ----
+    try:
+        ltp_resp = market_api.get_ltp(symbols=",".join(symbols))
+        ltp_map = {
+            k: v.last_price
+            for k, v in ltp_resp.data.items()
+            if v.last_price
+        }
+    except Exception as e:
+        print("LTP ERROR:", e)
+        return []
 
-    for stock in filtered_stocks:
+    print("LTP COUNT:", len(ltp_map))
+
+    # ---- Candle time window ----
+    to_date = now.strftime("%Y-%m-%d %H:%M")
+    from_date = (now - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M")
+
+    results = []
+
+    for stock in scan_stocks:
         symbol = stock["symbol"]
+        ltp = ltp_map.get(symbol)
 
-        ltp_data = ltp_map.get(symbol)
-        if not ltp_data:
-            continue
-
-        ltp = ltp_data.get("last_price")
         if not ltp:
             continue
 
-        prev_high = get_prev_5min_high(symbol)
-        if not prev_high:
+        try:
+            history_response = history_api.get_historical_candle_data(
+                instrument_key=symbol,
+                interval="5minute",
+                from_date=from_date,
+                to_date=to_date
+            )
+
+            candles = history_response.data.candles
+
+            if not candles or len(candles) < 2:
+                continue
+
+            # PREVIOUS COMPLETED 5-MIN CANDLE
+            prev_high = float(candles[-2][2])
+
+            print(
+                stock["name"],
+                "LTP:", ltp,
+                "PREV_HIGH:", prev_high
+            )
+
+            # ---- BREAKOUT LOGIC ----
+            if ltp >= prev_high * 0.995:
+                results.append({
+                    "symbol": symbol,
+                    "name": stock["name"],
+                    "sector": stock["sector"],
+                    "ltp": round(ltp, 2),
+                    "prev_5min_high": round(prev_high, 2),
+                    "breakout": True
+                })
+
+        except Exception as e:
+            print("CANDLE ERROR:", stock["name"], e)
             continue
-
-        print("LTP RESPONSE RAW:", ltp_resp.data)
-        print("LTP MAP SIZE:", len(ltp_map))
-
-        # 🔥 Breakout condition
-        # if ltp > prev_high:
-        if prev_high > 0 and ltp > prev_high * 0.995:
-            results.append({
-                "symbol": symbol,
-                "name": stock["name"],
-                "sector": stock["sector"],
-                "ltp": round(ltp, 2),
-                "prev_5min_high": round(prev_high, 2),
-                "breakout": True
-            })
-            print(f"{stock['name']} | LTP={ltp} | PREV_HIGH={prev_high}"
-                  )
-
-            print("========== DEBUG START ==========")
-            print("SYMBOL:", symbol)
-            print("LTP:", ltp)
-            print("CANDLES:", candles[-3:] if candles else candles)
-            print("========== DEBUG END ==========")
-            if not results:
-                return [{
-                        "debug": True,
-                        "message": "No breakouts detected",
-                        "ltp_count": len(ltp_map),
-                        "time": str(now)
-                        }]
 
     return results
