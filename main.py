@@ -1,36 +1,29 @@
+import upstox_client
+from upstox_client.configuration import Configuration
+from upstox_client.api_client import ApiClient
+from upstox_client.api.market_quote_api import MarketQuoteApi
+from upstox_client.api.history_api import HistoryApi
+
 from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
-import pytz
 import os
-
-from upstox_client import Configuration, ApiClient
-from upstox_client.apis import MarketQuoteApi, HistoryApi
-
+import requests
+import pytz
 from instruments import STOCKS, SECTORS
 
 app = FastAPI()
 
-# ---------- CORS ----------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ---------- Upstox Setup ----------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
-
-if not UPSTOX_ACCESS_TOKEN:
-    raise RuntimeError("UPSTOX_ACCESS_TOKEN not set")
 
 config = Configuration()
 config.access_token = UPSTOX_ACCESS_TOKEN
 
 api_client = ApiClient(config)
-market_api = MarketQuoteApi(api_client)
+
+
+quote_api = MarketQuoteApi(api_client)
 history_api = HistoryApi(api_client)
+
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -69,7 +62,7 @@ def screener(sector: str = Query("ALL")):
 
     # ---- Batch LTP ----
     try:
-        ltp_resp = market_api.get_ltp(symbols=",".join(symbols))
+        ltp_resp = quote_api.get_ltp(symbols=",".join(symbols))
         ltp_map = {
             k: v.last_price
             for k, v in ltp_resp.data.items()
