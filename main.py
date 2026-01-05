@@ -14,6 +14,7 @@ HEADERS = {
     "Accept": "application/json"
 }
 
+
 # ================= MARKET TIME CHECK =================
 
 
@@ -80,10 +81,14 @@ def get_prev_5min_high(symbol):
 
 
 # ================= SCREENER =================
+print("=== SCREENER HIT ===")
+print("Sector:", sector)
+
+
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
-    if not is_market_open():
-        return [{"message": "Market closed"}]
+  #  if not is_market_open():
+   #     return [{"message": "Market closed"}]
 
     results = []
 
@@ -116,6 +121,9 @@ def screener(sector: str = Query("ALL")):
         if not prev_high:
             continue
 
+        print("LTP RESPONSE RAW:", ltp_resp.data)
+        print("LTP MAP SIZE:", len(ltp_map))
+
         # 🔥 Breakout condition
         # if ltp > prev_high:
         if prev_high > 0 and ltp > prev_high * 0.995:
@@ -135,5 +143,12 @@ def screener(sector: str = Query("ALL")):
             print("LTP:", ltp)
             print("CANDLES:", candles[-3:] if candles else candles)
             print("========== DEBUG END ==========")
+            if not results:
+                return [{
+                        "debug": True,
+                        "message": "No breakouts detected",
+                        "ltp_count": len(ltp_map),
+                        "time": str(now)
+                        }]
 
     return results
