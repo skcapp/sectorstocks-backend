@@ -48,21 +48,23 @@ def get_5min_candles(symbol):
 # -----------------------------
 def get_ltp(symbol):
     r = requests.get(
-        LTP_URL,
+        "https://api.upstox.com/v2/market-quote/ltp",
         headers=HEADERS,
-        params={"instrument_key": symbol},
+        params={"instruments[]": symbol},
         timeout=10
     )
+
     if r.status_code != 200:
         return None
 
     data = r.json().get("data", {})
     return data.get(symbol, {}).get("last_price")
 
-
 # -----------------------------
 # VWAP
 # -----------------------------
+
+
 def calculate_vwap(candles):
     total_pv = 0
     total_vol = 0
