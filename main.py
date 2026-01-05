@@ -61,14 +61,21 @@ def get_prev_5min_high(symbol):
     if response.status_code != 200:
         return None
 
-    candles = response.json().get("data", {}).get("candles", [])
+   # candles = response.json().get("data", {}).get("candles", [])
+    candles = candle_response.data.candles
 
     # Need at least 2 completed candles
-    if len(candles) < 2:
+   # if len(candles) < 2:
+    if not candles or len(candles) < 2:
         return None
 
     # 🔥 FIX: use MAX HIGH of completed candles (exclude current forming candle)
-    prev_high = max(c[2] for c in candles[:-1])
+    # prev_high = max(c[2] for c in candles[:-1])
+
+    # PREVIOUS completed 5-min candle
+    prev_candle = candles[-2]
+    prev_high = float(prev_candle[2])
+
     return prev_high
 
 
@@ -111,7 +118,7 @@ def screener(sector: str = Query("ALL")):
 
         # 🔥 Breakout condition
         # if ltp > prev_high:
-        if ltp > prev_high * 0.995:
+        if prev_high > 0 and ltp > prev_high * 0.995:
             results.append({
                 "symbol": symbol,
                 "name": stock["name"],
@@ -120,5 +127,7 @@ def screener(sector: str = Query("ALL")):
                 "prev_5min_high": round(prev_high, 2),
                 "breakout": True
             })
+            print(f"{stock['name']} | LTP={ltp} | PREV_HIGH={prev_high}"
+                  )
 
     return results
