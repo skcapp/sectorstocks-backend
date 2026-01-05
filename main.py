@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Query
 import requests
 import os
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from instruments import STOCKS, SECTORS
+
 
 app = FastAPI()
 
@@ -17,8 +18,14 @@ HEADERS = {
 
 
 def is_market_open():
-    now = datetime.now().time()
-    return time(9, 15) <= now <= time(15, 30)
+    # Convert UTC → IST
+    ist_now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    current_time = ist_now.time()
+
+    market_open = time(9, 15)
+    market_close = time(15, 30)
+
+    return market_open <= current_time <= market_close
 
 
 # ================= SECTORS =================
