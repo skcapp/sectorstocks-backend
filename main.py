@@ -1,105 +1,147 @@
 from fastapi import FastAPI, Query
-from typing import List, Dict
-from instruments import STOCKS, SECTORS
-from indicators import calculate_vwap, calculate_rsi
-import requests
 import os
+import requests
 from datetime import datetime, time
-import pytz
+from instruments import STOCKS, SECTORS
 
-# =====================
-# CONFIG
-# =====================
-BASE_URL = "https://api.upstox.com/v2"
-ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
-IST = pytz.timezone("Asia/Kolkata")
+app = FastAPI()
 
-app = FastAPI(title="Professional Intraday Screener", version="3.0")
+UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
-# =====================
-# HELPERS
-# =====================
+HEADERS = {
+    "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}",
+    "Accept": "application/json"
+}
+
+UPSTOX_CANDLE_URL = "https://api.upstox.com/v2/historical-candle/intraday"
+
+# -----------------------------
+# Utility: Market hours check
+# -----------------------------
 
 
-def market_open():
-    now = datetime.now(IST).time()
+def is_market_open():
+    now = datetime.now().time()
     return time(9, 15) <= now <= time(15, 30)
 
 
-def headers():
-    return {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Accept": "application/json"
-    }
+# -----------------------------
+# Fetch 5-min candles
+# -----------------------------
+def get_5min_candles(symbol):
+    url = f"{UPSTOX_CANDLE_URL}/{symbol}/5minute"
+    r = requests.get(url, headers=HEADERS, timeout=10)
+    if r.status_code != 200:
+        return []
+
+    data = r.json().get("data", {})
+    return data.get("candles", [])
 
 
-def get_ltp(symbol):
-    url = f"{BASE_URL}/market-quote/ltp"
-    r = requests.get(url, headers=headers(), params={
-                     "symbol": symbol}, timeout=5)
-    return r.json()["data"][symbol]["last_price"]
+# -----------------------------
+# VWAP calculation
+# -----------------------------
+def calculate_vwap(candles):
+    total_pv = 0
+    total_vol = 0
+    for c in candles:
+        high = c[2]
+        low = c[3]
+        close = c[4]
+        volume = c[5]
+        typical_price = (high + low + close) / 3
+        total_pv += typical_price * volume
+        total_vol += volume
+
+    if total_vol == 0:
+        return 0
+    return round(total_pv / total_vol, 2)
 
 
-def get_5min_candles(symbol, count=20):
-    url = f"{BASE_URL}/historical-candle/intraday/{symbol}/5minute"
-    r = requests.get(url, headers=headers(), timeout=5)
-    candles = r.json()["data"]["candles"]
-    return candles[-count:]
+# -----------------------------
+# RSI (simple 14-period)
+# -----------------------------
+def calculate_rsi(candles, period=14):
+    if len(candles) < period + 1:
+        return 0
 
-# =====================
-# ROUTES
-# =====================
+    gains = []
+    losses = []
+
+    for i in range(1, period + 1):
+        change = candles[-i][4] - candles[-i - 1][4]
+        if change >= 0:
+            gains.append(change)
+        else:
+            losses.append(abs(change))
+
+    avg_gain = sum(gains) / period if gains else 0
+    avg_loss = sum(losses) / period if losses else 0
+
+    if avg_loss == 0:
+        return 100
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi, 2)
 
 
-@app.get("/")
-def root():
-    return {"status": "ok", "market_open": market_open()}
-
-
+# -----------------------------
+# API: sectors
+# -----------------------------
 @app.get("/sectors")
-def sectors():
+def get_sectors():
     return SECTORS
 
 
+# -----------------------------
+# API: screener
+# -----------------------------
 @app.get("/screener")
-def screener(sector: str = Query("ALL")) -> List[Dict]:
+def screener(sector: str = Query("ALL")):
 
-    if not market_open():
+    if not is_market_open():
         return [{"message": "Market closed"}]
 
-    sector = sector.upper()
-    filtered = [
-        s for s in STOCKS
-        if sector == "ALL" or s["sector"].upper() == sector
-    ]
+    results = []
 
-    output = []
+    for stock in STOCKS:
 
-    for stock in filtered:
-        symbol = stock["symbol"]
-
-        try:
-            candles = get_5min_candles(symbol)
-            ltp = get_ltp(symbol)
-
-            prev_5min_high = candles[-2][2]  # previous candle HIGH
-            breakout = ltp > prev_5min_high
-
-            vwap = calculate_vwap(candles)
-            rsi = calculate_rsi(candles)
-
-            output.append({
-                "symbol": symbol,
-                "name": stock["name"],
-                "sector": stock["sector"],
-                "price": ltp,
-                "prev_5min_high": prev_5min_high,
-                "breakout": breakout,
-                "vwap": vwap,
-                "rsi": rsi
-            })
-
-        except Exception:
+        # Sector filter
+        if sector != "ALL" and stock["sector"] != sector:
             continue
 
-    return output
+        candles = get_5min_candles(stock["symbol"])
+
+        # Need at least 2 candles
+        if len(candles) < 2:
+            continue
+
+        # --- TRUE 5-MIN BREAKOUT LOGIC ---
+        prev_candle = candles[-2]
+        curr_candle = candles[-1]
+
+        prev_high = prev_candle[2]
+        curr_high = curr_candle[2]
+
+        # Breakout condition
+        if curr_high <= prev_high:
+            continue
+
+        # Indicators
+        vwap = calculate_vwap(candles)
+        rsi = calculate_rsi(candles)
+
+        results.append({
+            "symbol": stock["symbol"],
+            "name": stock["name"],
+            "sector": stock["sector"],
+            "price": curr_candle[4],
+            "breakout": True,
+            "prev_high": prev_high,
+            "current_high": curr_high,
+            "vwap": vwap,
+            "rsi": rsi
+        })
+
+    return results
