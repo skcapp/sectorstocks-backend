@@ -3,10 +3,14 @@ import os
 import requests
 from datetime import datetime, time
 import pytz
+
 from instruments import STOCKS, SECTORS
 
 app = FastAPI()
 
+# -----------------------------
+# Upstox config
+# -----------------------------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
 HEADERS = {
@@ -14,13 +18,13 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-UPSTOX_CANDLE_URL = "https://api.upstox.com/v2/historical-candle/intraday"
+CANDLE_URL = "https://api.upstox.com/v2/historical-candle/intraday"
+LTP_URL = "https://api.upstox.com/v2/market-quote/ltp"
+
 
 # -----------------------------
-# Utility: Market hours check
+# Market hours (IST)
 # -----------------------------
-
-
 def is_market_open():
     ist = pytz.timezone("Asia/Kolkata")
     now = datetime.now(ist).time()
@@ -28,54 +32,68 @@ def is_market_open():
 
 
 # -----------------------------
-# Fetch 5-min candles
+# Fetch 5-minute candles
 # -----------------------------
 def get_5min_candles(symbol):
-    url = f"{UPSTOX_CANDLE_URL}/{symbol}/5minute"
+    url = f"{CANDLE_URL}/{symbol}/5minute"
     r = requests.get(url, headers=HEADERS, timeout=10)
     if r.status_code != 200:
         return []
 
-    data = r.json().get("data", {})
-    return data.get("candles", [])
+    return r.json().get("data", {}).get("candles", [])
 
 
 # -----------------------------
-# VWAP calculation
+# Fetch LIVE LTP
+# -----------------------------
+def get_ltp(symbol):
+    r = requests.get(
+        LTP_URL,
+        headers=HEADERS,
+        params={"instrument_key": symbol},
+        timeout=10
+    )
+    if r.status_code != 200:
+        return None
+
+    data = r.json().get("data", {})
+    return data.get(symbol, {}).get("last_price")
+
+
+# -----------------------------
+# VWAP
 # -----------------------------
 def calculate_vwap(candles):
     total_pv = 0
     total_vol = 0
+
     for c in candles:
-        high = c[2]
-        low = c[3]
-        close = c[4]
-        volume = c[5]
-        typical_price = (high + low + close) / 3
-        total_pv += typical_price * volume
-        total_vol += volume
+        high, low, close, vol = c[2], c[3], c[4], c[5]
+        tp = (high + low + close) / 3
+        total_pv += tp * vol
+        total_vol += vol
 
     if total_vol == 0:
         return 0
+
     return round(total_pv / total_vol, 2)
 
 
 # -----------------------------
-# RSI (simple 14-period)
+# RSI (14)
 # -----------------------------
 def calculate_rsi(candles, period=14):
     if len(candles) < period + 1:
         return 0
 
-    gains = []
-    losses = []
+    gains, losses = [], []
 
     for i in range(1, period + 1):
-        change = candles[-i][4] - candles[-i - 1][4]
-        if change >= 0:
-            gains.append(change)
+        diff = candles[-i][4] - candles[-i - 1][4]
+        if diff >= 0:
+            gains.append(diff)
         else:
-            losses.append(abs(change))
+            losses.append(abs(diff))
 
     avg_gain = sum(gains) / period if gains else 0
     avg_loss = sum(losses) / period if losses else 0
@@ -84,15 +102,14 @@ def calculate_rsi(candles, period=14):
         return 100
 
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(rsi, 2)
+    return round(100 - (100 / (1 + rs)), 2)
 
 
 # -----------------------------
 # API: sectors
 # -----------------------------
 @app.get("/sectors")
-def get_sectors():
+def sectors():
     return SECTORS
 
 
@@ -115,22 +132,22 @@ def screener(sector: str = Query("ALL")):
 
         candles = get_5min_candles(stock["symbol"])
 
-        # Need at least 2 candles
+        # Need at least 2 completed candles
         if len(candles) < 2:
             continue
 
-        # --- TRUE 5-MIN BREAKOUT LOGIC ---
-        prev_candle = candles[-2]
-        curr_candle = candles[-1]
+        # 🔴 PREVIOUS COMPLETED 5-MIN HIGH
+        prev_high = candles[-2][2]
 
-        prev_high = prev_candle[2]
-        curr_high = curr_candle[2]
-
-        # Breakout condition
-        if curr_high <= prev_high:
+        # 🔴 LIVE PRICE (LTP)
+        ltp = get_ltp(stock["symbol"])
+        if not ltp:
             continue
 
-        # Indicators
+        # 🔥 TRUE BREAKOUT CONDITION
+        if ltp <= prev_high:
+            continue
+
         vwap = calculate_vwap(candles)
         rsi = calculate_rsi(candles)
 
@@ -138,10 +155,9 @@ def screener(sector: str = Query("ALL")):
             "symbol": stock["symbol"],
             "name": stock["name"],
             "sector": stock["sector"],
-            "price": curr_candle[4],
+            "ltp": ltp,
+            "prev_5min_high": prev_high,
             "breakout": True,
-            "prev_high": prev_high,
-            "current_high": curr_high,
             "vwap": vwap,
             "rsi": rsi
         })

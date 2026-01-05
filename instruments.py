@@ -26,7 +26,7 @@ STOCKS = [
     {"symbol": "NSE_EQ|CIPLA", "name": "CIPLA", "sector": "PHARMA"},
     {"symbol": "NSE_EQ|ZYDUSLIFE", "name": "ZYDUSLIFE", "sector": "PHARMA"},
 
-    {"symbol": "NSE_EQ|TATAMOTORS", "name": "TATAMOTORS", "sector": "AUTO"},
+    {"symbol": "NSE_EQ|TMCV", "name": "TMCV", "sector": "AUTO"},
     {"symbol": "NSE_EQ|MARUTI", "name": "MARUTI", "sector": "AUTO"},
     {"symbol": "NSE_EQ|M&M", "name": "M&M", "sector": "AUTO"},
     {"symbol": "NSE_EQ|HEROMOTOCO", "name": "HEROMOTOCO", "sector": "AUTO"},
