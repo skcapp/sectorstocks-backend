@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query
 import os
 import requests
 from datetime import datetime, time
+import pytz
 from instruments import STOCKS, SECTORS
 
 app = FastAPI()
@@ -21,7 +22,8 @@ UPSTOX_CANDLE_URL = "https://api.upstox.com/v2/historical-candle/intraday"
 
 
 def is_market_open():
-    now = datetime.now().time()
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist).time()
     return time(9, 15) <= now <= time(15, 30)
 
 
