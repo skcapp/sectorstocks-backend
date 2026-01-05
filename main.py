@@ -5,7 +5,7 @@ from upstox_client.api.market_quote_api import MarketQuoteApi
 from upstox_client.api.history_api import HistoryApi
 
 from fastapi import FastAPI, Query
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import os
 import requests
 import pytz
@@ -28,7 +28,18 @@ history_api = HistoryApi(api_client)
 IST = pytz.timezone("Asia/Kolkata")
 
 
+def is_market_open():
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist).time()
+
+    market_open = time(9, 15)
+    market_close = time(15, 30)
+
+    return market_open <= now <= market_close
+
 # ---------- SECTORS ----------
+
+
 @app.get("/sectors")
 def get_sectors():
     return SECTORS
@@ -43,6 +54,7 @@ def screener(sector: str = Query("ALL")):
     now = datetime.now(IST)
 
     # ---- Market hours check ----
+
     market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
     market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
