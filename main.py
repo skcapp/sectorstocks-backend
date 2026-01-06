@@ -1,137 +1,141 @@
 import os
 import logging
+from datetime import datetime, timedelta, time
+from typing import List
+
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from upstox_client import Configuration, ApiClient
-from upstox_client.api.market_quote_api import MarketQuoteApi
+import pytz
 
-from instruments import STOCKS, SECTORS
+import upstox_client
+from upstox_client import MarketQuoteApi, HistoryApi
 
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# ---------------- FASTAPI ----------------
 app = FastAPI()
 
-# -----------------------------
-# Upstox Client Setup
-# -----------------------------
-config = Configuration()
-config.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
+# ---------------- UPSTOX SETUP ----------------
+UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
-api_client = ApiClient(config)
-quote_api = MarketQuoteApi(api_client)
+config = upstox_client.Configuration()
+config.access_token = UPSTOX_ACCESS_TOKEN
+api_client = upstox_client.ApiClient(config)
 
-# -----------------------------
-# Helper: Safe Quote Fetch
-# -----------------------------
+market_api = MarketQuoteApi(api_client)
+history_api = HistoryApi(api_client)
+
+API_VERSION = "2.0"
+IST = pytz.timezone("Asia/Kolkata")
+
+# ---------------- STOCK MASTER ----------------
+STOCKS = [
+    {"symbol": "HDFCBANK", "instrument_key": "NSE_EQ|HDFCBANK", "sector": "BANKING"},
+    {"symbol": "ICICIBANK", "instrument_key": "NSE_EQ|ICICIBANK", "sector": "BANKING"},
+    {"symbol": "INFY", "instrument_key": "NSE_EQ|INFY", "sector": "IT"},
+    {"symbol": "TCS", "instrument_key": "NSE_EQ|TCS", "sector": "IT"},
+    {"symbol": "SUNPHARMA", "instrument_key": "NSE_EQ|SUNPHARMA", "sector": "PHARMA"},
+    {"symbol": "CIPLA", "instrument_key": "NSE_EQ|CIPLA", "sector": "PHARMA"},
+    {"symbol": "MARUTI", "instrument_key": "NSE_EQ|MARUTI", "sector": "AUTO"},
+    {"symbol": "HEROMOTOCO", "instrument_key": "NSE_EQ|HEROMOTOCO", "sector": "AUTO"},
+]
+
+SECTORS = sorted(set(s["sector"] for s in STOCKS))
+SECTORS.insert(0, "ALL")
+
+# ---------------- HELPERS ----------------
 
 
-def get_quote_safe(instrument_key: str):
-    try:
-        response = quote_api.get_full_market_quote(
-            symbol=instrument_key,
-            api_version="2.0"
-        )
-        return response
-    except Exception as e:
-        logging.error(f"Quote failed for {instrument_key}: {e}")
-        return None
+def market_is_open() -> bool:
+    now = datetime.now(IST).time()
+    return time(9, 15) <= now <= time(15, 30)
 
-# -----------------------------
-# Screener API
-# -----------------------------
+# ---------------- ROUTES ----------------
+
+
+@app.get("/sectors")
+def sectors():
+    return SECTORS
 
 
 @app.get("/screener")
-def screener(sector: str = Query("ALL")):
-    logging.info(f"=== SCREENER HIT === {sector}")
+def screener(sector: str = Query(...)):
+    logger.info(f"=== SCREENER HIT === {sector}")
 
-    if sector not in SECTORS:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Invalid sector"}
+    if not market_is_open():
+        return [{"message": "Market closed"}]
+
+    # Filter stocks
+    if sector == "ALL":
+        filtered = STOCKS
+    else:
+        filtered = [s for s in STOCKS if s["sector"] == sector]
+
+    if not filtered:
+        return []
+
+    instrument_keys = [s["instrument_key"] for s in filtered]
+
+    # ---------- FETCH LTPs (BATCH) ----------
+    try:
+        quote_response = market_api.get_full_market_quote(
+            symbol=",".join(instrument_keys),
+            api_version=API_VERSION
         )
+    except Exception as e:
+        logger.error(f"LTP fetch failed: {e}")
+        return []
 
-    filtered = [
-        s for s in STOCKS
-        if sector == "ALL" or s.get("sector") == sector
-    ]
-
+    quotes = quote_response.data or {}
     results = []
 
     for stock in filtered:
-        instrument_key = stock.get("instrument_key")
-        if not instrument_key:
-            logging.error(f"Missing instrument_key: {stock}")
+        ikey = stock["instrument_key"]
+        symbol = stock["symbol"]
+
+        if ikey not in quotes:
             continue
 
-        quote = get_quote_safe(instrument_key)
-        if not quote:
-            continue
+        ltp = quotes[ikey]["last_price"]
 
+        # ---------- FETCH 5-MIN CANDLES ----------
         try:
-            data = quote["data"][instrument_key]
-            results.append({
-                "instrument_key": instrument_key,
-                "name": stock.get("name"),
-                "sector": stock.get("sector"),
-                "ltp": data.get("last_price"),
-                "open": data.get("ohlc", {}).get("open"),
-                "high": data.get("ohlc", {}).get("high"),
-                "low": data.get("ohlc", {}).get("low"),
-                "volume": data.get("volume")
-            })
+            to_dt = datetime.now(IST)
+            from_dt = to_dt - timedelta(minutes=20)
+
+            candles_resp = history_api.get_historical_candle_data(
+                instrument_key=ikey,
+                interval="5minute",
+                from_date=from_dt.strftime("%Y-%m-%d %H:%M"),
+                to_date=to_dt.strftime("%Y-%m-%d %H:%M"),
+                api_version=API_VERSION
+            )
+
+            candles = candles_resp.data.candles if candles_resp.data else []
+
+            # Need at least 2 candles → use PREVIOUS CLOSED candle
+            if len(candles) < 2:
+                continue
+
+            prev_closed = candles[-2]
+            prev_high = prev_closed[2]
+
+            logger.info(
+                f"{symbol} | LTP={ltp} | Prev5High={prev_high}"
+            )
+
+            # ----------Toggle breakout threshold here if needed ----------
+            if ltp > prev_high:
+                results.append({
+                    "symbol": symbol,
+                    "sector": stock["sector"],
+                    "ltp": round(ltp, 2),
+                    "prev_5min_high": round(prev_high, 2),
+                    "breakout": True
+                })
+
         except Exception as e:
-            logging.error(f"Parse error {instrument_key}: {e}")
+            logger.error(f"{symbol} candle error: {e}")
 
     return results
-
-# -----------------------------
-# 🔍 DEBUG ENDPOINT (IMPORTANT)
-# -----------------------------
-
-
-@app.get("/debug/instruments")
-def debug_instruments():
-    """
-    Tests every instrument_key and returns:
-    ✔ VALID keys
-    ❌ INVALID keys with exact error
-    """
-
-    report = []
-
-    for stock in STOCKS:
-        key = stock.get("instrument_key")
-
-        if not key:
-            report.append({
-                "name": stock.get("name"),
-                "status": "INVALID",
-                "reason": "Missing instrument_key"
-            })
-            continue
-
-        try:
-            quote = quote_api.get_full_market_quote(
-                symbol=key,
-                api_version="2.0"
-            )
-            report.append({
-                "name": stock.get("name"),
-                "instrument_key": key,
-                "status": "VALID"
-            })
-        except Exception as e:
-            report.append({
-                "name": stock.get("name"),
-                "instrument_key": key,
-                "status": "INVALID",
-                "error": str(e)
-            })
-
-    return {
-        "total": len(STOCKS),
-        "valid": len([r for r in report if r["status"] == "VALID"]),
-        "invalid": len([r for r in report if r["status"] == "INVALID"]),
-        "report": report
-    }
