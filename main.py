@@ -1,72 +1,90 @@
 import os
 import logging
-from datetime import datetime, timedelta, time
-from typing import List
-
-from fastapi import FastAPI, Query
+from datetime import datetime, timedelta
 import pytz
 
-import upstox_client
-from upstox_client import MarketQuoteApi, HistoryApi
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 
-# ---------------- LOGGING ----------------
+from upstox_client import Configuration, ApiClient
+from upstox_client.api.market_quote_api import MarketQuoteApi
+from upstox_client.api.history_api import HistoryApi
+
+from instruments import STOCKS, SECTORS
+
+# --------------------------------------------------
+# Logging
+# --------------------------------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("main")
 
-# ---------------- FASTAPI ----------------
+# --------------------------------------------------
+# FastAPI app
+# --------------------------------------------------
 app = FastAPI()
 
-# ---------------- UPSTOX SETUP ----------------
-UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-config = upstox_client.Configuration()
+# --------------------------------------------------
+# Upstox config
+# --------------------------------------------------
+UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+API_VERSION = "2.0"
+
+config = Configuration()
 config.access_token = UPSTOX_ACCESS_TOKEN
-api_client = upstox_client.ApiClient(config)
+api_client = ApiClient(config)
 
 market_api = MarketQuoteApi(api_client)
 history_api = HistoryApi(api_client)
 
-API_VERSION = "2.0"
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
 IST = pytz.timezone("Asia/Kolkata")
 
-# ---------------- STOCK MASTER ----------------
-STOCKS = [
-    {"symbol": "HDFCBANK", "instrument_key": "NSE_EQ|HDFCBANK", "sector": "BANKING"},
-    {"symbol": "ICICIBANK", "instrument_key": "NSE_EQ|ICICIBANK", "sector": "BANKING"},
-    {"symbol": "INFY", "instrument_key": "NSE_EQ|INFY", "sector": "IT"},
-    {"symbol": "TCS", "instrument_key": "NSE_EQ|TCS", "sector": "IT"},
-    {"symbol": "SUNPHARMA", "instrument_key": "NSE_EQ|SUNPHARMA", "sector": "PHARMA"},
-    {"symbol": "CIPLA", "instrument_key": "NSE_EQ|CIPLA", "sector": "PHARMA"},
-    {"symbol": "MARUTI", "instrument_key": "NSE_EQ|MARUTI", "sector": "AUTO"},
-    {"symbol": "HEROMOTOCO", "instrument_key": "NSE_EQ|HEROMOTOCO", "sector": "AUTO"},
-]
 
-SECTORS = sorted(set(s["sector"] for s in STOCKS))
-SECTORS.insert(0, "ALL")
+def is_market_open() -> bool:
+    now = datetime.now(IST)
+    if now.weekday() >= 5:  # Sat/Sun
+        return False
 
-# ---------------- HELPERS ----------------
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now <= market_close
 
 
-def market_is_open() -> bool:
-    now = datetime.now(IST).time()
-    return time(9, 15) <= now <= time(15, 30)
+def previous_5min_window():
+    now = datetime.now(IST)
+    end = now.replace(second=0, microsecond=0)
+    start = end - timedelta(minutes=5)
+    return start, end
 
-# ---------------- ROUTES ----------------
 
-
+# --------------------------------------------------
+# Routes
+# --------------------------------------------------
 @app.get("/sectors")
-def sectors():
+def get_sectors():
     return SECTORS
 
 
 @app.get("/screener")
-def screener(sector: str = Query(...)):
+def screener(sector: str = Query("ALL")):
     logger.info(f"=== SCREENER HIT === {sector}")
 
-    if not market_is_open():
+    if not is_market_open():
         return [{"message": "Market closed"}]
 
-    # Filter stocks
+    # -----------------------------
+    # Filter stocks by sector
+    # -----------------------------
     if sector == "ALL":
         filtered = STOCKS
     else:
@@ -75,60 +93,65 @@ def screener(sector: str = Query(...)):
     if not filtered:
         return []
 
-    instrument_keys = [s["instrument_key"] for s in filtered]
+    instrument_keys = [s["symbol"] for s in filtered]
 
-    # ---------- FETCH LTPs (BATCH) ----------
+    # -----------------------------
+    # Fetch LTP (BATCH – FIXED)
+    # -----------------------------
     try:
         quote_response = market_api.get_full_market_quote(
-            symbol=",".join(instrument_keys),
+            symbol=instrument_keys,   # ✅ MUST BE LIST
             api_version=API_VERSION
         )
+        quotes = quote_response.data or {}
+        logger.info(f"Quote keys returned: {list(quotes.keys())}")
     except Exception as e:
-        logger.error(f"LTP fetch failed: {e}")
+        logger.error(f"Upstox quote error: {e}")
         return []
 
-    quotes = quote_response.data or {}
+    # -----------------------------
+    # Time window
+    # -----------------------------
+    start, end = previous_5min_window()
+
     results = []
 
+    # -----------------------------
+    # Per-stock logic
+    # -----------------------------
     for stock in filtered:
-        ikey = stock["instrument_key"]
         symbol = stock["symbol"]
 
-        if ikey not in quotes:
+        if symbol not in quotes:
+            logger.info(f"Skipping {symbol} – no quote")
             continue
 
-        ltp = quotes[ikey]["last_price"]
-
-        # ---------- FETCH 5-MIN CANDLES ----------
         try:
-            to_dt = datetime.now(IST)
-            from_dt = to_dt - timedelta(minutes=20)
+            ltp = quotes[symbol]["last_price"]
 
-            candles_resp = history_api.get_historical_candle_data(
-                instrument_key=ikey,
+            candle_resp = history_api.get_historical_candle_data(
+                instrument_key=symbol,
                 interval="5minute",
-                from_date=from_dt.strftime("%Y-%m-%d %H:%M"),
-                to_date=to_dt.strftime("%Y-%m-%d %H:%M"),
+                from_date=start.strftime("%Y-%m-%d %H:%M"),
+                to_date=end.strftime("%Y-%m-%d %H:%M"),
                 api_version=API_VERSION
             )
 
-            candles = candles_resp.data.candles if candles_resp.data else []
-
-            # Need at least 2 candles → use PREVIOUS CLOSED candle
-            if len(candles) < 2:
+            candles = candle_resp.data or []
+            if not candles:
                 continue
 
-            prev_closed = candles[-2]
-            prev_high = prev_closed[2]
+            prev_high = max(c[2] for c in candles)  # HIGH column
 
             logger.info(
                 f"{symbol} | LTP={ltp} | Prev5High={prev_high}"
             )
 
-            # ----------Toggle breakout threshold here if needed ----------
-            if ltp > prev_high:
+            # 🔥 BREAKOUT LOGIC (slightly relaxed)
+            if ltp > prev_high * 0.995:
                 results.append({
                     "symbol": symbol,
+                    "name": stock["name"],
                     "sector": stock["sector"],
                     "ltp": round(ltp, 2),
                     "prev_5min_high": round(prev_high, 2),
@@ -136,6 +159,17 @@ def screener(sector: str = Query(...)):
                 })
 
         except Exception as e:
-            logger.error(f"{symbol} candle error: {e}")
+            logger.error(f"{symbol} processing error: {e}")
 
     return results
+
+
+# --------------------------------------------------
+# Debug helper
+# --------------------------------------------------
+@app.get("/debug/instruments")
+def debug_instruments():
+    return {
+        "total": len(STOCKS),
+        "symbols": [s["symbol"] for s in STOCKS]
+    }
