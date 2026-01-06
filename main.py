@@ -115,13 +115,15 @@ def screener(sector: str = Query("ALL")):
             )
 
             # ---- BREAKOUT LOGIC ----
-            if ltp >= prev_high * 0.998:
+            day_high = quote["ohlc"]["high"]
+
+            if ltp >= day_high * 0.998:
                 results.append({
                     "symbol": symbol,
                     "name": stock["name"],
                     "sector": stock["sector"],
                     "ltp": round(ltp, 2),
-                    "prev_5min_high": round(prev_high, 2),
+                    "day_high": round(day_high, 2),
                     "breakout": True
                 })
 
