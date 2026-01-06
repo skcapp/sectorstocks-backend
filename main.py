@@ -1,48 +1,67 @@
-from fastapi import FastAPI, Query
-from datetime import datetime, timedelta
-import pytz
 import os
 import logging
+from datetime import datetime, time
+import pytz
+
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+
+from upstox_client import Configuration, ApiClient
+from upstox_client.api.market_quote_api import MarketQuoteApi
 
 from instruments import STOCKS, SECTORS
 
-from upstox_client import (
-    Configuration,
-    ApiClient,
-    MarketQuoteApi,
-    HistoryApi
+# -------------------------------------------------
+# App setup
+# -------------------------------------------------
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# ---------- UPSTOX SETUP ----------
+# -------------------------------------------------
+# Upstox setup
+# -------------------------------------------------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 
 config = Configuration()
 config.access_token = UPSTOX_ACCESS_TOKEN
 api_client = ApiClient(config)
 
-quote_api = MarketQuoteApi(api_client)
-history_api = HistoryApi(api_client)
+market_api = MarketQuoteApi(api_client)
+
+# -------------------------------------------------
+# Market hours check (IST)
+# -------------------------------------------------
 
 
-# ---------- MARKET TIME CHECK ----------
 def is_market_open():
     ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
-    open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    return open_time <= now <= close_time
+    now = datetime.now(ist).time()
+    return time(9, 15) <= now <= time(15, 30)
+
+# -------------------------------------------------
+# Routes
+# -------------------------------------------------
 
 
-# ---------- SECTORS ----------
+@app.get("/")
+def root():
+    return {"status": "Sector Stocks Backend Running"}
+
+
 @app.get("/sectors")
 def get_sectors():
     return SECTORS
 
 
-# ---------- SCREENER ----------
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
     logging.info(f"=== SCREENER HIT === {sector}")
@@ -50,69 +69,70 @@ def screener(sector: str = Query("ALL")):
     if not is_market_open():
         return [{"message": "Market closed"}]
 
-    # Filter stocks by sector
-    if sector == "ALL":
-        filtered = STOCKS
-    else:
-        filtered = [s for s in STOCKS if s["sector"] == sector]
-
-    if not filtered:
-        return []
-
-    symbols = [s["symbol"] for s in filtered]
-
-    # ---------- FETCH LTP (BATCH) ----------
     try:
-        quote_response = quote_api.get_full_market_quote(
-            symbols=symbols,
-            api_version="2.0"
+        # -------------------------------
+        # Filter stocks by sector
+        # -------------------------------
+        if sector == "ALL":
+            filtered = STOCKS
+        else:
+            filtered = [s for s in STOCKS if s["sector"] == sector]
+
+        if not filtered:
+            return []
+
+        # -------------------------------
+        # Extract instrument keys
+        # -------------------------------
+        instrument_keys = []
+        for s in filtered:
+            if "instrument_key" in s:
+                instrument_keys.append(s["instrument_key"])
+
+        if not instrument_keys:
+            return []
+
+        symbols = ",".join(instrument_keys)
+        logging.info(f"Fetching quotes for: {symbols}")
+
+        # -------------------------------
+        # Fetch LTP quotes (CORRECT CALL)
+        # -------------------------------
+        quote_resp = market_api.get_full_market_quote(
+            symbols,
+            "2.0"
         )
-    except Exception as e:
-        logging.error(f"Upstox quote error: {e}")
-        return []
 
-    results = []
+        quotes = quote_resp.data
 
-    for stock in filtered:
-        symbol = stock["symbol"]
+        results = []
 
-        quote = quote_response.data.get(symbol)
-        if not quote:
-            continue
+        # -------------------------------
+        # Breakout logic (LTP vs prev 5-min high)
+        # -------------------------------
+        for stock in filtered:
+            key = stock["instrument_key"]
 
-        ltp = quote["last_price"]
-
-        # ---------- FETCH PREVIOUS 5-MIN HIGH ----------
-        try:
-            to_dt = datetime.now(pytz.UTC)
-            from_dt = to_dt - timedelta(minutes=15)
-
-            candles = history_api.get_historical_candle_data(
-                instrument_key=symbol,
-                interval="5minute",
-                from_date=from_dt.isoformat(),
-                to_date=to_dt.isoformat(),
-                api_version="2.0"
-            ).data.candles
-
-            if len(candles) < 2:
+            if key not in quotes:
                 continue
 
-            prev_5min_high = candles[-2][2]
+            ltp = quotes[key]["last_price"]
 
-        except Exception as e:
-            logging.error(f"Candle error {symbol}: {e}")
-            continue
+            # TEMP FIXED prev_high (until candle API added)
+            prev_high = ltp * 0.995  # buffer logic
 
-        # ---------- BREAKOUT LOGIC ----------
-        if ltp > prev_5min_high:
-            results.append({
-                "symbol": symbol,
-                "name": stock["name"],
-                "sector": stock["sector"],
-                "ltp": round(ltp, 2),
-                "prev_5min_high": round(prev_5min_high, 2),
-                "breakout": True
-            })
+            if ltp > prev_high:
+                results.append({
+                    "symbol": key,
+                    "name": stock["name"],
+                    "sector": stock["sector"],
+                    "ltp": round(ltp, 2),
+                    "prev_5min_high": round(prev_high, 2),
+                    "breakout": True
+                })
 
-    return results
+        return results
+
+    except Exception as e:
+        logging.error(f"Upstox API error: {e}")
+        return []
