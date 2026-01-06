@@ -6,25 +6,33 @@ from upstox_client.api.market_quote_api import MarketQuoteApi
 
 from instruments import STOCKS, SECTORS
 
-
 app = FastAPI()
 
-# ---------------- CONFIG ----------------
+# ---------- CONFIG ----------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+
+if not UPSTOX_ACCESS_TOKEN:
+    raise RuntimeError("UPSTOX_ACCESS_TOKEN not set")
 
 config = Configuration()
 config.access_token = UPSTOX_ACCESS_TOKEN
+
 client = ApiClient(config)
 market_api = MarketQuoteApi(client)
 
-# ---------------- SCREENER ----------------
+# ---------- ENDPOINTS ----------
+
+
+@app.get("/sectors")
+def get_sectors():
+    return SECTORS
 
 
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
     print("=== SCREENER HIT ===", sector)
 
-    # ✅ FIX 1: sector filter
+    # Sector filter (CRITICAL)
     if sector == "ALL":
         filtered_stocks = STOCKS
     else:
@@ -36,8 +44,12 @@ def screener(sector: str = Query("ALL")):
 
     symbols = [s["symbol"] for s in filtered_stocks]
 
-    # Fetch quotes in ONE batch
-    quotes = market_api.get_full_market_quote(symbols)
+    try:
+        response = market_api.get_full_market_quote(symbols)
+        quotes = response.data  # ✅ THIS IS IMPORTANT
+    except Exception as e:
+        print("Upstox API error:", str(e))
+        return []
 
     results = []
 
@@ -48,12 +60,21 @@ def screener(sector: str = Query("ALL")):
             continue
 
         quote = quotes[symbol]
-        ltp = quote["last_price"]
-        day_high = quote["ohlc"]["high"]
+
+        ltp = quote.get("last_price")
+        ohlc = quote.get("ohlc")
+
+        if not ltp or not ohlc:
+            continue
+
+        day_high = ohlc.get("high")
+
+        if not day_high:
+            continue
 
         print(symbol, "LTP:", ltp, "HIGH:", day_high)
 
-        # 🔥 Breakout logic (reliable)
+        # 🔥 Reliable breakout condition
         if ltp >= day_high * 0.998:
             results.append({
                 "symbol": symbol,
@@ -65,8 +86,3 @@ def screener(sector: str = Query("ALL")):
             })
 
     return results
-
-
-@app.get("/sectors")
-def sectors():
-    return SECTORS
