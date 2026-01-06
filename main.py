@@ -6,8 +6,12 @@ import logging
 
 from instruments import STOCKS, SECTORS
 
-from upstox_client import Configuration, ApiClient
-from upstox_client.apis import MarketQuoteApi, HistoryApi
+from upstox_client import (
+    Configuration,
+    ApiClient,
+    MarketQuoteApi,
+    HistoryApi
+)
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
