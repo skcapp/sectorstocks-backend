@@ -32,7 +32,7 @@ app.add_middleware(
 )
 
 # --------------------------------------------------
-# Upstox
+# Upstox setup
 # --------------------------------------------------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 API_VERSION = "2.0"
@@ -76,6 +76,14 @@ def sectors():
     return SECTORS
 
 
+@app.get("/debug/instruments")
+def debug_instruments():
+    return {
+        "total": len(STOCKS),
+        "instrument_keys": [s.get("instrument_key") for s in STOCKS],
+    }
+
+
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
     logger.info(f"=== SCREENER HIT === {sector}")
@@ -83,7 +91,9 @@ def screener(sector: str = Query("ALL")):
     if not is_market_open():
         return [{"message": "Market closed"}]
 
+    # ------------------------------
     # Filter stocks
+    # ------------------------------
     if sector == "ALL":
         filtered = STOCKS
     else:
@@ -92,14 +102,12 @@ def screener(sector: str = Query("ALL")):
     if not filtered:
         return []
 
-    # ✅ FIX: instrument_key ONLY
     instrument_keys = []
     stock_map = {}
 
     for s in filtered:
         key = s.get("instrument_key")
         if not key:
-            logger.warning(f"Skipping stock without instrument_key: {s}")
             continue
         instrument_keys.append(key)
         stock_map[key] = s
@@ -108,15 +116,19 @@ def screener(sector: str = Query("ALL")):
         return []
 
     # --------------------------------------------------
-    # Batch LTP
+    # ✅ FIX: comma-separated string (Upstox requirement)
     # --------------------------------------------------
+    instrument_key_str = ",".join(instrument_keys)
+
+    logger.info(f"Requesting quotes for {len(instrument_keys)} instruments")
+
     try:
         quote_resp = market_api.get_full_market_quote(
-            symbol=instrument_keys,
+            instrument_key=instrument_key_str,
             api_version=API_VERSION
         )
         quotes = quote_resp.data or {}
-        logger.info(f"LTP fetched for {len(quotes)} instruments")
+        logger.info(f"Quotes received: {len(quotes)}")
     except Exception as e:
         logger.error(f"Upstox quote error: {e}")
         return []
@@ -152,8 +164,8 @@ def screener(sector: str = Query("ALL")):
                 f"{stock['name']} | LTP={ltp} | PrevHigh={prev_high}"
             )
 
-            # 🔥 Breakout
-            if ltp > prev_high * 0.995:
+            # 🔥 breakout condition
+            if ltp > prev_high:
                 results.append({
                     "instrument_key": inst_key,
                     "name": stock["name"],
@@ -164,14 +176,6 @@ def screener(sector: str = Query("ALL")):
                 })
 
         except Exception as e:
-            logger.error(f"{inst_key} error: {e}")
+            logger.error(f"{inst_key} processing error: {e}")
 
     return results
-
-
-@app.get("/debug/instruments")
-def debug():
-    return {
-        "total": len(STOCKS),
-        "keys": [s.get("instrument_key") for s in STOCKS]
-    }
