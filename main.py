@@ -124,7 +124,7 @@ def screener(sector: str = Query("ALL")):
 
     try:
         quote_resp = market_api.get_full_market_quote(
-            instrument_key=instrument_key_str,
+            symbol=instrument_key_str,   # ← YES, symbol is instrument_key
             api_version=API_VERSION
         )
         quotes = quote_resp.data or {}
