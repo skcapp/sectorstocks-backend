@@ -127,8 +127,9 @@ def screener(sector: str = Query("ALL")):
             symbol=instrument_key_str,   # ← YES, symbol is instrument_key
             api_version=API_VERSION
         )
-        quotes = quote_resp.data or {}
+        quotes = quote_resp.data.data or {}
         logger.info(f"Quotes received: {len(quotes)}")
+        logger.info(f"Quote keys sample: {list(quotes.keys())[:3]}")
     except Exception as e:
         logger.error(f"Upstox quote error: {e}")
         return []
