@@ -8,9 +8,8 @@ from instruments import STOCKS, SECTORS
 
 app = FastAPI()
 
-# ---------- CONFIG ----------
+# -------- CONFIG --------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
-
 if not UPSTOX_ACCESS_TOKEN:
     raise RuntimeError("UPSTOX_ACCESS_TOKEN not set")
 
@@ -20,7 +19,7 @@ config.access_token = UPSTOX_ACCESS_TOKEN
 client = ApiClient(config)
 market_api = MarketQuoteApi(client)
 
-# ---------- ENDPOINTS ----------
+# -------- ENDPOINTS --------
 
 
 @app.get("/sectors")
@@ -32,39 +31,37 @@ def get_sectors():
 def screener(sector: str = Query("ALL")):
     print("=== SCREENER HIT ===", sector)
 
-    # Sector filter
     if sector == "ALL":
-        filtered_stocks = STOCKS
+        filtered = STOCKS
     else:
-        filtered_stocks = [s for s in STOCKS if s["sector"] == sector]
+        filtered = [s for s in STOCKS if s["sector"] == sector]
 
-    if not filtered_stocks:
+    if not filtered:
         return []
 
-    symbols = [s["symbol"] for s in filtered_stocks]
+    instrument_keys = [s["instrument_key"] for s in filtered]
 
     try:
         response = market_api.get_full_market_quote(
             api_version="2.0",
-            symbol=",".join(symbols)
+            instrument_key=",".join(instrument_keys)
         )
         quotes = response.data
     except Exception as e:
-        print("Upstox API error:", str(e))
+        print("Upstox API error:", e)
         return []
 
     results = []
 
-    for stock in filtered_stocks:
-        symbol = stock["symbol"]
+    for stock in filtered:
+        key = stock["instrument_key"]
 
-        if symbol not in quotes:
+        if key not in quotes:
             continue
 
-        quote = quotes[symbol]
-
-        ltp = quote.get("last_price")
-        ohlc = quote.get("ohlc")
+        q = quotes[key]
+        ltp = q.get("last_price")
+        ohlc = q.get("ohlc")
 
         if not ltp or not ohlc:
             continue
@@ -73,12 +70,11 @@ def screener(sector: str = Query("ALL")):
         if not day_high:
             continue
 
-        print(symbol, "LTP:", ltp, "HIGH:", day_high)
+        print(stock["name"], ltp, day_high)
 
-        # 🔥 Breakout logic (reliable)
+        # 🔥 Day High Breakout
         if ltp >= day_high * 0.998:
             results.append({
-                "symbol": symbol,
                 "name": stock["name"],
                 "sector": stock["sector"],
                 "ltp": round(ltp, 2),
