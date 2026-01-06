@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 # --------------------------------------------------
-# FastAPI app
+# App
 # --------------------------------------------------
 app = FastAPI()
 
@@ -32,7 +32,7 @@ app.add_middleware(
 )
 
 # --------------------------------------------------
-# Upstox config
+# Upstox
 # --------------------------------------------------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
 API_VERSION = "2.0"
@@ -44,23 +44,24 @@ api_client = ApiClient(config)
 market_api = MarketQuoteApi(api_client)
 history_api = HistoryApi(api_client)
 
+IST = pytz.timezone("Asia/Kolkata")
+
 # --------------------------------------------------
 # Helpers
 # --------------------------------------------------
-IST = pytz.timezone("Asia/Kolkata")
 
 
-def is_market_open() -> bool:
+def is_market_open():
     now = datetime.now(IST)
-    if now.weekday() >= 5:  # Sat/Sun
+    if now.weekday() >= 5:
         return False
 
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    return market_open <= now <= market_close
+    open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return open_time <= now <= close_time
 
 
-def previous_5min_window():
+def prev_5min_window():
     now = datetime.now(IST)
     end = now.replace(second=0, microsecond=0)
     start = end - timedelta(minutes=5)
@@ -71,7 +72,7 @@ def previous_5min_window():
 # Routes
 # --------------------------------------------------
 @app.get("/sectors")
-def get_sectors():
+def sectors():
     return SECTORS
 
 
@@ -82,55 +83,59 @@ def screener(sector: str = Query("ALL")):
     if not is_market_open():
         return [{"message": "Market closed"}]
 
-    # -----------------------------
-    # Filter stocks by sector
-    # -----------------------------
+    # Filter stocks
     if sector == "ALL":
         filtered = STOCKS
     else:
-        filtered = [s for s in STOCKS if s["sector"] == sector]
+        filtered = [s for s in STOCKS if s.get("sector") == sector]
 
     if not filtered:
         return []
 
-    instrument_keys = [s["symbol"] for s in filtered]
+    # ✅ FIX: instrument_key ONLY
+    instrument_keys = []
+    stock_map = {}
 
-    # -----------------------------
-    # Fetch LTP (BATCH – FIXED)
-    # -----------------------------
+    for s in filtered:
+        key = s.get("instrument_key")
+        if not key:
+            logger.warning(f"Skipping stock without instrument_key: {s}")
+            continue
+        instrument_keys.append(key)
+        stock_map[key] = s
+
+    if not instrument_keys:
+        return []
+
+    # --------------------------------------------------
+    # Batch LTP
+    # --------------------------------------------------
     try:
-        quote_response = market_api.get_full_market_quote(
-            symbol=instrument_keys,   # ✅ MUST BE LIST
+        quote_resp = market_api.get_full_market_quote(
+            symbol=instrument_keys,
             api_version=API_VERSION
         )
-        quotes = quote_response.data or {}
-        logger.info(f"Quote keys returned: {list(quotes.keys())}")
+        quotes = quote_resp.data or {}
+        logger.info(f"LTP fetched for {len(quotes)} instruments")
     except Exception as e:
         logger.error(f"Upstox quote error: {e}")
         return []
 
-    # -----------------------------
-    # Time window
-    # -----------------------------
-    start, end = previous_5min_window()
-
+    start, end = prev_5min_window()
     results = []
 
-    # -----------------------------
-    # Per-stock logic
-    # -----------------------------
-    for stock in filtered:
-        symbol = stock["symbol"]
-
-        if symbol not in quotes:
-            logger.info(f"Skipping {symbol} – no quote")
+    # --------------------------------------------------
+    # Breakout logic
+    # --------------------------------------------------
+    for inst_key, stock in stock_map.items():
+        if inst_key not in quotes:
             continue
 
         try:
-            ltp = quotes[symbol]["last_price"]
+            ltp = quotes[inst_key]["last_price"]
 
             candle_resp = history_api.get_historical_candle_data(
-                instrument_key=symbol,
+                instrument_key=inst_key,
                 interval="5minute",
                 from_date=start.strftime("%Y-%m-%d %H:%M"),
                 to_date=end.strftime("%Y-%m-%d %H:%M"),
@@ -141,16 +146,16 @@ def screener(sector: str = Query("ALL")):
             if not candles:
                 continue
 
-            prev_high = max(c[2] for c in candles)  # HIGH column
+            prev_high = max(c[2] for c in candles)
 
             logger.info(
-                f"{symbol} | LTP={ltp} | Prev5High={prev_high}"
+                f"{stock['name']} | LTP={ltp} | PrevHigh={prev_high}"
             )
 
-            # 🔥 BREAKOUT LOGIC (slightly relaxed)
+            # 🔥 Breakout
             if ltp > prev_high * 0.995:
                 results.append({
-                    "symbol": symbol,
+                    "instrument_key": inst_key,
                     "name": stock["name"],
                     "sector": stock["sector"],
                     "ltp": round(ltp, 2),
@@ -159,17 +164,14 @@ def screener(sector: str = Query("ALL")):
                 })
 
         except Exception as e:
-            logger.error(f"{symbol} processing error: {e}")
+            logger.error(f"{inst_key} error: {e}")
 
     return results
 
 
-# --------------------------------------------------
-# Debug helper
-# --------------------------------------------------
 @app.get("/debug/instruments")
-def debug_instruments():
+def debug():
     return {
         "total": len(STOCKS),
-        "symbols": [s["symbol"] for s in STOCKS]
+        "keys": [s.get("instrument_key") for s in STOCKS]
     }
