@@ -1,36 +1,52 @@
 from fastapi import FastAPI, Query
+from datetime import datetime, timedelta
+import pytz
 import os
-
-from upstox_client import ApiClient, Configuration
-from upstox_client.api.market_quote_api import MarketQuoteApi
+import logging
 
 from instruments import STOCKS, SECTORS
 
-app = FastAPI()
+from upstox_client import Configuration, ApiClient
+from upstox_client.apis import MarketQuoteApi, HistoryApi
 
-# -------- CONFIG --------
+app = FastAPI()
+logging.basicConfig(level=logging.INFO)
+
+# ---------- UPSTOX SETUP ----------
 UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
-if not UPSTOX_ACCESS_TOKEN:
-    raise RuntimeError("UPSTOX_ACCESS_TOKEN not set")
 
 config = Configuration()
 config.access_token = UPSTOX_ACCESS_TOKEN
+api_client = ApiClient(config)
 
-client = ApiClient(config)
-market_api = MarketQuoteApi(client)
-
-# -------- ENDPOINTS --------
+quote_api = MarketQuoteApi(api_client)
+history_api = HistoryApi(api_client)
 
 
+# ---------- MARKET TIME CHECK ----------
+def is_market_open():
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return open_time <= now <= close_time
+
+
+# ---------- SECTORS ----------
 @app.get("/sectors")
 def get_sectors():
     return SECTORS
 
 
+# ---------- SCREENER ----------
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
-    print("=== SCREENER HIT ===", sector)
+    logging.info(f"=== SCREENER HIT === {sector}")
 
+    if not is_market_open():
+        return [{"message": "Market closed"}]
+
+    # Filter stocks by sector
     if sector == "ALL":
         filtered = STOCKS
     else:
@@ -39,46 +55,59 @@ def screener(sector: str = Query("ALL")):
     if not filtered:
         return []
 
-    instrument_keys = [s["instrument_key"] for s in filtered]
+    symbols = [s["symbol"] for s in filtered]
 
+    # ---------- FETCH LTP (BATCH) ----------
     try:
-        response = market_api.get_full_market_quote(
-            api_version="2.0",
-            instrument_key=",".join(instrument_keys)
+        quote_response = quote_api.get_full_market_quote(
+            symbols=symbols,
+            api_version="2.0"
         )
-        quotes = response.data
     except Exception as e:
-        print("Upstox API error:", e)
+        logging.error(f"Upstox quote error: {e}")
         return []
 
     results = []
 
     for stock in filtered:
-        key = stock["instrument_key"]
+        symbol = stock["symbol"]
 
-        if key not in quotes:
+        quote = quote_response.data.get(symbol)
+        if not quote:
             continue
 
-        q = quotes[key]
-        ltp = q.get("last_price")
-        ohlc = q.get("ohlc")
+        ltp = quote["last_price"]
 
-        if not ltp or not ohlc:
+        # ---------- FETCH PREVIOUS 5-MIN HIGH ----------
+        try:
+            to_dt = datetime.now(pytz.UTC)
+            from_dt = to_dt - timedelta(minutes=15)
+
+            candles = history_api.get_historical_candle_data(
+                instrument_key=symbol,
+                interval="5minute",
+                from_date=from_dt.isoformat(),
+                to_date=to_dt.isoformat(),
+                api_version="2.0"
+            ).data.candles
+
+            if len(candles) < 2:
+                continue
+
+            prev_5min_high = candles[-2][2]
+
+        except Exception as e:
+            logging.error(f"Candle error {symbol}: {e}")
             continue
 
-        day_high = ohlc.get("high")
-        if not day_high:
-            continue
-
-        print(stock["name"], ltp, day_high)
-
-        # 🔥 Day High Breakout
-        if ltp >= day_high * 0.998:
+        # ---------- BREAKOUT LOGIC ----------
+        if ltp > prev_5min_high:
             results.append({
+                "symbol": symbol,
                 "name": stock["name"],
                 "sector": stock["sector"],
                 "ltp": round(ltp, 2),
-                "day_high": round(day_high, 2),
+                "prev_5min_high": round(prev_5min_high, 2),
                 "breakout": True
             })
 
