@@ -32,21 +32,23 @@ def get_sectors():
 def screener(sector: str = Query("ALL")):
     print("=== SCREENER HIT ===", sector)
 
-    # Sector filter (CRITICAL)
+    # Sector filter
     if sector == "ALL":
         filtered_stocks = STOCKS
     else:
         filtered_stocks = [s for s in STOCKS if s["sector"] == sector]
 
     if not filtered_stocks:
-        print("No stocks after sector filter")
         return []
 
     symbols = [s["symbol"] for s in filtered_stocks]
 
     try:
-        response = market_api.get_full_market_quote(symbols)
-        quotes = response.data  # ✅ THIS IS IMPORTANT
+        response = market_api.get_full_market_quote(
+            api_version="2.0",
+            symbol=",".join(symbols)
+        )
+        quotes = response.data
     except Exception as e:
         print("Upstox API error:", str(e))
         return []
@@ -68,13 +70,12 @@ def screener(sector: str = Query("ALL")):
             continue
 
         day_high = ohlc.get("high")
-
         if not day_high:
             continue
 
         print(symbol, "LTP:", ltp, "HIGH:", day_high)
 
-        # 🔥 Reliable breakout condition
+        # 🔥 Breakout logic (reliable)
         if ltp >= day_high * 0.998:
             results.append({
                 "symbol": symbol,
