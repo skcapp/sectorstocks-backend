@@ -11,7 +11,7 @@ SECTORS = ["ALL",
            ]
 
 STOCKS = [
-    {"symbol": "NSE_EQ|INE059A01026", "name": "HDFCBANK", "sector": "BANKING"},
+    {"symbol": "NSE_EQ|INE040A01034", "name": "HDFCBANK", "sector": "BANKING"},
     {"symbol": "NSE_EQ|INE090A01021", "name": "ICICIBANK", "sector": "BANKING"},
     {"symbol": "NSE_EQ|INE095A01012", "name": "INDUSINDBK", "sector": "BANKING"},
     {"symbol": "NSE_EQ|INE028A01039", "name": "BANKBARODA", "sector": "BANKING"},
@@ -30,7 +30,6 @@ STOCKS = [
     {"symbol": "NSE_EQ|INE101A01026", "name": "M&M", "sector": "AUTO"},
     {"symbol": "NSE_EQ|INE158A01026", "name": "HEROMOTOCO", "sector": "AUTO"},
 
-    {"symbol": "NSE_EQ|INE931S01010", "name": "ADANIENSOL", "sector": "ENERGY"},
     {"symbol": "NSE_EQ|INE257A01026", "name": "BHEL", "sector": "ENERGY"},
     {"symbol": "NSE_EQ|INE094A01015", "name": "HINDPETRO", "sector": "ENERGY"},
     {"symbol": "NSE_EQ|INE003A01024", "name": "SIEMENS", "sector": "ENERGY"},
