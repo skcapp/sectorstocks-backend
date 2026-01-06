@@ -29,7 +29,6 @@ STOCKS = [
     {"instrument_key": "NSE_EQ|ZYDUSLIFE", "name": "ZYDUSLIFE", "sector": "PHARMA"},
 
     {"instrument_key": "NSE_EQ|MARUTI", "name": "MARUTI", "sector": "AUTO"},
-    {"instrument_key": "NSE_EQ|M&M", "name": "M&M", "sector": "AUTO"},
     {"instrument_key": "NSE_EQ|HEROMOTOCO", "name": "HEROMOTOCO", "sector": "AUTO"},
 
     {"instrument_key": "NSE_EQ|BHEL", "name": "BHEL", "sector": "ENERGY"},
