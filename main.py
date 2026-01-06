@@ -1,166 +1,137 @@
 import os
 import logging
-import threading
-import time
-from datetime import datetime, time as dtime, timedelta
-
-import pytz
 from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi.responses import JSONResponse
 from upstox_client import Configuration, ApiClient
 from upstox_client.api.market_quote_api import MarketQuoteApi
-from upstox_client.api.history_api import HistoryApi
 
 from instruments import STOCKS, SECTORS
 
-# -------------------------------------------------
-# App setup
-# -------------------------------------------------
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 logging.basicConfig(level=logging.INFO)
 
-# -------------------------------------------------
-# Upstox setup
-# -------------------------------------------------
-ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+app = FastAPI()
 
+# -----------------------------
+# Upstox Client Setup
+# -----------------------------
 config = Configuration()
-config.access_token = ACCESS_TOKEN
-client = ApiClient(config)
+config.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
 
-quote_api = MarketQuoteApi(client)
-history_api = HistoryApi(client)
+api_client = ApiClient(config)
+quote_api = MarketQuoteApi(api_client)
 
-# -------------------------------------------------
-# Market hours (IST)
-# -------------------------------------------------
-
-
-def is_market_open():
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist).time()
-    return dtime(9, 20) <= now <= dtime(15, 30)
+# -----------------------------
+# Helper: Safe Quote Fetch
+# -----------------------------
 
 
-# -------------------------------------------------
-# Cache
-# -------------------------------------------------
-CACHE = []
+def get_quote_safe(instrument_key: str):
+    try:
+        response = quote_api.get_full_market_quote(
+            symbol=instrument_key,
+            api_version="2.0"
+        )
+        return response
+    except Exception as e:
+        logging.error(f"Quote failed for {instrument_key}: {e}")
+        return None
 
-# -------------------------------------------------
-# Routes
-# -------------------------------------------------
-
-
-@app.get("/sectors")
-def get_sectors():
-    return SECTORS
+# -----------------------------
+# Screener API
+# -----------------------------
 
 
 @app.get("/screener")
 def screener(sector: str = Query("ALL")):
     logging.info(f"=== SCREENER HIT === {sector}")
 
-    if not is_market_open():
-        return [{"message": "Market closed"}]
+    if sector not in SECTORS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid sector"}
+        )
 
-    if sector == "ALL":
-        return CACHE
+    filtered = [
+        s for s in STOCKS
+        if sector == "ALL" or s.get("sector") == sector
+    ]
 
-    return [s for s in CACHE if s["sector"] == sector]
+    results = []
 
-
-# -------------------------------------------------
-# Breakout engine (runs every 5 minutes)
-# -------------------------------------------------
-def refresh_cache():
-    global CACHE
-
-    ist = pytz.timezone("Asia/Kolkata")
-
-    while True:
-        results = []
-
-        if not is_market_open():
-            CACHE = []
-            time.sleep(300)
+    for stock in filtered:
+        instrument_key = stock.get("instrument_key")
+        if not instrument_key:
+            logging.error(f"Missing instrument_key: {stock}")
             continue
 
-        for stock in STOCKS:
-            try:
-                instrument_key = stock["instrument_key"]
+        quote = get_quote_safe(instrument_key)
+        if not quote:
+            continue
 
-                # -------------------------
-                # 1️⃣ LTP
-                # -------------------------
-                quote = quote_api.get_full_market_quote(
-                    instrument_key,
-                    "2.0"
-                )
+        try:
+            data = quote["data"][instrument_key]
+            results.append({
+                "instrument_key": instrument_key,
+                "name": stock.get("name"),
+                "sector": stock.get("sector"),
+                "ltp": data.get("last_price"),
+                "open": data.get("ohlc", {}).get("open"),
+                "high": data.get("ohlc", {}).get("high"),
+                "low": data.get("ohlc", {}).get("low"),
+                "volume": data.get("volume")
+            })
+        except Exception as e:
+            logging.error(f"Parse error {instrument_key}: {e}")
 
-                ltp = quote.data[instrument_key]["last_price"]
+    return results
 
-                # -------------------------
-                # 2️⃣ 5-minute candles
-                # -------------------------
-                to_dt = datetime.now(ist)
-                from_dt = to_dt - timedelta(minutes=20)
-
-                candles = history_api.get_historical_candle_data(
-                    instrument_key,
-                    "5minute",
-                    from_dt.strftime("%Y-%m-%d"),
-                    to_dt.strftime("%Y-%m-%d"),
-                    "2.0"
-                )
-
-                candle_data = candles.data.candles
-
-                if len(candle_data) < 2:
-                    continue
-
-                prev_candle = candle_data[-2]
-                curr_candle = candle_data[-1]
-
-                prev_high = prev_candle[2]
-                prev_vol = prev_candle[5]
-                curr_vol = curr_candle[5]
-
-                # -------------------------
-                # 3️⃣ Breakout logic
-                # -------------------------
-                if ltp > prev_high and curr_vol > prev_vol:
-                    results.append({
-                        "symbol": instrument_key,
-                        "name": stock["name"],
-                        "sector": stock["sector"],
-                        "ltp": round(ltp, 2),
-                        "prev_5min_high": round(prev_high, 2),
-                        "volume": curr_vol,
-                        "breakout": True
-                    })
-
-            except Exception as e:
-                logging.error(f"{stock['name']} error: {e}")
-
-        CACHE = results
-        logging.info(f"Cache refreshed: {len(CACHE)} breakouts")
-
-        time.sleep(300)  # 5 minutes
+# -----------------------------
+# 🔍 DEBUG ENDPOINT (IMPORTANT)
+# -----------------------------
 
 
-# -------------------------------------------------
-# Startup
-# -------------------------------------------------
-@app.on_event("startup")
-def startup():
-    threading.Thread(target=refresh_cache, daemon=True).start()
+@app.get("/debug/instruments")
+def debug_instruments():
+    """
+    Tests every instrument_key and returns:
+    ✔ VALID keys
+    ❌ INVALID keys with exact error
+    """
+
+    report = []
+
+    for stock in STOCKS:
+        key = stock.get("instrument_key")
+
+        if not key:
+            report.append({
+                "name": stock.get("name"),
+                "status": "INVALID",
+                "reason": "Missing instrument_key"
+            })
+            continue
+
+        try:
+            quote = quote_api.get_full_market_quote(
+                symbol=key,
+                api_version="2.0"
+            )
+            report.append({
+                "name": stock.get("name"),
+                "instrument_key": key,
+                "status": "VALID"
+            })
+        except Exception as e:
+            report.append({
+                "name": stock.get("name"),
+                "instrument_key": key,
+                "status": "INVALID",
+                "error": str(e)
+            })
+
+    return {
+        "total": len(STOCKS),
+        "valid": len([r for r in report if r["status"] == "VALID"]),
+        "invalid": len([r for r in report if r["status"] == "INVALID"]),
+        "report": report
+    }
