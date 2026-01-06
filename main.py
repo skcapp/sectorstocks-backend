@@ -99,15 +99,8 @@ def screener(sector: str = Query("ALL")):
         if not ltp:
             continue
 
-        try:
-            history_response = history_api.get_historical_candle_data(
-                instrument_key=symbol,
-                interval="5minute",
-                from_date=from_date,
-                to_date=to_date
-            )
-
-            candles = history_response.data.candles
+            candles = candle_response["data"]["candles"][-4:-1]
+            prev_high = max(c[2] for c in candles)
 
             if not candles or len(candles) < 2:
                 continue
@@ -122,7 +115,7 @@ def screener(sector: str = Query("ALL")):
             )
 
             # ---- BREAKOUT LOGIC ----
-            if ltp >= prev_high * 0.995:
+            if ltp >= prev_high * 0.998:
                 results.append({
                     "symbol": symbol,
                     "name": stock["name"],
@@ -131,9 +124,5 @@ def screener(sector: str = Query("ALL")):
                     "prev_5min_high": round(prev_high, 2),
                     "breakout": True
                 })
-
-        except Exception as e:
-            print("CANDLE ERROR:", stock["name"], e)
-            continue
 
     return results
