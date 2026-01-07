@@ -163,26 +163,39 @@ def screener(sector: str = Query("ALL")):
 
     logger.info(f"Quotes received: {len(quotes)}")
 
+   # results = []
+
+ #   for stock in filtered:
+ #       key = stock["instrument_key"]
+  #      q = quotes.get(key)
+
+   #     if not q:
+    #        continue
+
+    #    ltp = q.get("last_price")
+    #    ohlc = q.get("ohlc", {})
+    #   open_price = ohlc.get("open")
+
+    #   if ltp is None or open_price is None:
+    #       continue
+
+    #   results.append({
+    #       "symbol": stock["name"],
+    #     "open": open_price,
+    #       "ltp": ltp
+    #  })
+
     results = []
 
-    for stock in filtered:
-        key = stock["instrument_key"]
-        q = quotes.get(key)
-
-        if not q:
-            continue
-
-        ltp = q.get("last_price")
-        ohlc = q.get("ohlc", {})
-        open_price = ohlc.get("open")
-
-        if ltp is None or open_price is None:
-            continue
-
+    for instrument_key, quote in quotes.items():
+        logger.info(f"Quote sample: {next(iter(quotes.values()))}")
         results.append({
-            "symbol": stock["name"],
-            "open": open_price,
-            "ltp": ltp
+            "instrument_key": instrument_key,
+            "ltp": quote.get("last_price"),
+            "open": quote.get("ohlc", {}).get("open"),
+            "high": quote.get("ohlc", {}).get("high"),
+            "low": quote.get("ohlc", {}).get("low"),
+            "close": quote.get("ohlc", {}).get("close"),
         })
 
     return results
