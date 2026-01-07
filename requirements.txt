@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-upstox-client
+upstox-python-sdk
 requests
 pytz
 numpy
