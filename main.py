@@ -1,3 +1,4 @@
+import pytz
 import os
 import logging
 from datetime import datetime, time
@@ -77,9 +78,13 @@ SECTORS.insert(0, "ALL")
 # --------------------------------------------------
 
 
+IST = pytz.timezone("Asia/Kolkata")
+
+
 def is_market_open():
-    now = datetime.now().time()
-    return time(9, 15) <= now <= time(15, 30)
+    now_ist = datetime.now(IST).time()
+    return time(9, 15) <= now_ist <= time(15, 30)
+
 
 # --------------------------------------------------
 # ROUTES
