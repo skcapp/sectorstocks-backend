@@ -3,4 +3,3 @@ uvicorn
 requests
 pytz
 numpy
-upstox-python-sdk
