@@ -31,11 +31,11 @@ app.add_middleware(
 # ================= DATA =================
 
 INSTRUMENTS = [
-    {"name": "RELIANCE", "instrument_key": "NSE_EQ|INE002A01018", "sector": "ALL"},
-    {"name": "TCS", "instrument_key": "NSE_EQ|INE467B01029", "sector": "ALL"},
-    {"name": "INFY", "instrument_key": "NSE_EQ|INE009A01021", "sector": "ALL"},
-    {"name": "ICICIBANK", "instrument_key": "NSE_EQ|INE090A01021", "sector": "ALL"},
-    {"name": "HDFCBANK", "instrument_key": "NSE_EQ|INE040A01034", "sector": "ALL"},
+    #  {"name": "RELIANCE", "instrument_key": "NSE_EQ|INE002A01018", "sector": "ALL"},
+    #  {"name": "TCS", "instrument_key": "NSE_EQ|INE467B01029", "sector": "ALL"},
+    #  {"name": "INFY", "instrument_key": "NSE_EQ|INE009A01021", "sector": "ALL"},
+    #   {"name": "ICICIBANK", "instrument_key": "NSE_EQ|INE090A01021", "sector": "ALL"},
+    # {"name": "HDFCBANK", "instrument_key": "NSE_EQ|INE040A01034", "sector": "ALL"},
     # keep adding…
     {"name": "HDFCBANK", "instrument_key": "NSE_EQ|INE040A01034", "sector": "BANKING"},
     {"name": "ICICIBANK", "instrument_key":  "NSE_EQ|INE090A01021", "sector": "BANKING"},
