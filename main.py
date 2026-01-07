@@ -128,9 +128,28 @@ def screener(sector: str = Query("ALL")):
     if not is_market_open():
         return [{"message": "Market closed"}]
 
+    SECTOR_ALIASES = {
+        "it": ["it", "information technology", "it services", "technology"],
+        "banking": ["bank", "banking", "financials"],
+    }
+
+    def sector_match(stock_sector: str, requested: str) -> bool:
+        stock_sector = stock_sector.lower().strip()
+        requested = requested.lower().strip()
+
+        if requested in SECTOR_ALIASES:
+            return stock_sector in SECTOR_ALIASES[requested]
+
+        return stock_sector == requested
+
+  #  filtered = [
+  #      i for i in INSTRUMENTS
+   #     if sector == "ALL" or i["sector"] == sector
+   # ]
+
     filtered = [
         i for i in INSTRUMENTS
-        if sector == "ALL" or i["sector"] == sector
+        if sector_match(i.get("sector", ""), sector)
     ]
 
     if not filtered:
