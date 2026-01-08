@@ -1,139 +1,70 @@
 import os
 import logging
-from datetime import datetime, time
-
 from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
+from kiteconnect import KiteConnect
+from datetime import datetime, timedelta
+from typing import List
 
-import upstox_client
-from upstox_client.api.market_quote_api import MarketQuoteApi
-import pytz
-from datetime import datetime
-
-
-# -------------------------------------------------------------------
-# LOGGING
-# -------------------------------------------------------------------
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# -------------------------------------------------------------------
-# FASTAPI APP
-# -------------------------------------------------------------------
-app = FastAPI()
+# ---------------- APP ----------------
+app = FastAPI(title="Sector Breakout Screener")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ---------------- KITE INIT ----------------
+KITE_API_KEY = os.getenv("KITE_API_KEY")
+KITE_ACCESS_TOKEN = os.getenv("KITE_ACCESS_TOKEN")
 
-# -------------------------------------------------------------------
-# UPSTOX CONFIG
-# -------------------------------------------------------------------
-ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
+if not KITE_API_KEY or not KITE_ACCESS_TOKEN:
+    raise RuntimeError("KITE_API_KEY or KITE_ACCESS_TOKEN missing")
 
-configuration = upstox_client.Configuration()
-configuration.access_token = ACCESS_TOKEN
+kite = KiteConnect(api_key=KITE_API_KEY)
+kite.set_access_token(KITE_ACCESS_TOKEN)
 
-api_client = upstox_client.ApiClient(configuration)
-quote_api = MarketQuoteApi(api_client)
-
-# -------------------------------------------------------------------
-# SECTORS & INSTRUMENT KEYS
-# -------------------------------------------------------------------
+# ---------------- SECTORS ----------------
 SECTORS = {
-    "IT": [
-        "NSE_EQ|INFY",
-        "NSE_EQ|TCS",
-        "NSE_EQ|TECHM",
-        "NSE_EQ|HCLTECH",
-    ],
-    "BANK": [
-        "NSE_EQ|HDFCBANK",
-        "NSE_EQ|ICICIBANK",
-        "NSE_EQ|INDUSINDBK",
-        "NSE_EQ|BANKBARODA",
-    ],
-    "ALL": [
-        "NSE_EQ|INFY",
-        "NSE_EQ|TCS",
-        "NSE_EQ|TECHM",
-        "NSE_EQ|HCLTECH",
-        "NSE_EQ|HDFCBANK",
-        "NSE_EQ|ICICIBANK",
-        "NSE_EQ|INDUSINDBK",
-        "NSE_EQ|BANKBARODA",
-        "NSE_EQ|RELIANCE",
-        "NSE_EQ|LT",
-        "NSE_EQ|ITC",
-        "NSE_EQ|SBIN",
-        "NSE_EQ|AXISBANK",
-        "NSE_EQ|MARUTI",
-        "NSE_EQ|TATAMOTORS",
-        "NSE_EQ|SUNPHARMA",
-        "NSE_EQ|DRREDDY",
-        "NSE_EQ|CIPLA",
-        "NSE_EQ|JSWSTEEL",
-        "NSE_EQ|TATASTEEL",
-        "NSE_EQ|ADANIENT",
-        "NSE_EQ|HINDALCO",
-        "NSE_EQ|BPCL",
-        "NSE_EQ|ONGC",
-        "NSE_EQ|NTPC",
-        "NSE_EQ|POWERGRID",
-        "NSE_EQ|ULTRACEMCO",
-        "NSE_EQ|GRASIM",
-        "NSE_EQ|BAJFINANCE",
-        "NSE_EQ|BAJAJFINSV",
-        "NSE_EQ|KOTAKBANK",
-        "NSE_EQ|ASIANPAINT",
-        "NSE_EQ|NESTLEIND",
-        "NSE_EQ|BRITANNIA",
-        "NSE_EQ|WIPRO",
-        "NSE_EQ|COALINDIA",
-        "NSE_EQ|TITAN",
-        "NSE_EQ|HINDUNILVR",
-        "NSE_EQ|SBILIFE",
-    ],
+    "IT": ["NSE:INFY", "NSE:TCS", "NSE:TECHM", "NSE:HCLTECH", "NSE:WIPRO"],
+    "BANK": ["NSE:HDFCBANK", "NSE:ICICIBANK", "NSE:AXISBANK", "NSE:SBIN"],
+    "AUTO": ["NSE:MARUTI", "NSE:TATAMOTORS", "NSE:M&M", "NSE:HEROMOTOCO"],
 }
 
-# -------------------------------------------------------------------
-# MARKET TIME CHECK (OPTIONAL)
-# -------------------------------------------------------------------
+# ---------------- UTIL ----------------
 
 
-def is_market_open():
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
-
-    if now.weekday() >= 5:  # Saturday, Sunday
-        return False
-
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-
-    return market_open <= now <= market_close
+def get_symbols(sector: str) -> List[str]:
+    if sector == "ALL":
+        symbols = []
+        for s in SECTORS.values():
+            symbols.extend(s)
+        return list(set(symbols))
+    return SECTORS.get(sector, [])
 
 
-# -------------------------------------------------------------------
-# DEBUG ENDPOINT
-# -------------------------------------------------------------------
+def get_previous_5min_candle(symbol: str):
+    try:
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(minutes=15)
 
+        instrument_token = kite.ltp([symbol])[symbol]["instrument_token"]
 
-@app.get("/debug/instruments")
-def debug_instruments():
-    all_keys = sorted(set(k for v in SECTORS.values() for k in v))
-    return {
-        "total": len(all_keys),
-        "instrument_keys": all_keys,
-    }
+        candles = kite.historical_data(
+            instrument_token,
+            from_dt,
+            to_dt,
+            interval="5minute"
+        )
 
-# -------------------------------------------------------------------
-# SCREENER ENDPOINT
-# -------------------------------------------------------------------
+        if len(candles) < 2:
+            return None
+
+        return candles[-2]  # previous completed candle
+
+    except Exception as e:
+        logger.error(f"Candle fetch error {symbol}: {e}")
+        return None
+
+# ---------------- API ----------------
 
 
 @app.get("/screener")
@@ -141,43 +72,55 @@ def screener(sector: str = Query("ALL")):
     sector = sector.upper()
     logger.info(f"=== SCREENER HIT === {sector}")
 
-    if sector not in SECTORS:
-        return {"error": "Invalid sector"}
+    symbols = get_symbols(sector)
+    if not symbols:
+        return []
 
-    instrument_keys = SECTORS[sector]
-    logger.info(f"Requesting quotes for {len(instrument_keys)} instruments")
-
-    # Optional market time check
-    if not is_market_open():
-        return [{"message": "Market closed"}]
+    logger.info(f"Requesting quotes for {len(symbols)} instruments")
 
     try:
-        quotes = quote_api.get_full_market_quote(
-            instrument_key=instrument_keys
-        )
-
-        logger.info(f"Quotes received: {len(quotes)}")
-
+        quotes = kite.ltp(symbols)
     except Exception as e:
-        logger.error(f"Upstox quote error: {e}")
+        logger.error(f"LTP error: {e}")
         return []
 
     results = []
 
-    # ----------------------------------------------------------------
-    # CRITICAL FIX — CORRECT QUOTE PARSING
-    # ----------------------------------------------------------------
-    for instrument_key, q in quotes.items():
+    for symbol in symbols:
         try:
-            results.append({
-                "instrument_key": instrument_key,
-                "ltp": q.get("last_price"),
-                "open": q.get("ohlc", {}).get("open"),
-                "high": q.get("ohlc", {}).get("high"),
-                "low": q.get("ohlc", {}).get("low"),
-                "close": q.get("ohlc", {}).get("close"),
-            })
+            quote = quotes.get(symbol)
+            if not quote:
+                continue
+
+            ltp = quote["last_price"]
+            volume = quote.get("volume", 0)
+
+            prev_candle = get_previous_5min_candle(symbol)
+            if not prev_candle:
+                continue
+
+            prev_high = prev_candle["high"]
+            prev_volume = prev_candle["volume"]
+
+            # ---- BREAKOUT + VOLUME CONDITION ----
+            if ltp > prev_high and volume > prev_volume:
+                results.append({
+                    "symbol": symbol,
+                    "ltp": round(ltp, 2),
+                    "breakout_level": prev_high,
+                    "volume": volume,
+                    "prev_volume": prev_volume,
+                    "sector": sector
+                })
+
         except Exception as e:
-            logger.error(f"Parse error for {instrument_key}: {e}")
+            logger.error(f"Processing error {symbol}: {e}")
 
     return results
+
+# ---------------- HEALTH ----------------
+
+
+@app.get("/")
+def health():
+    return {"status": "running"}
