@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import upstox_client
 from upstox_client.api.market_quote_api import MarketQuoteApi
+import pytz
+from datetime import datetime
 
 
 # -------------------------------------------------------------------
@@ -104,8 +106,17 @@ SECTORS = {
 
 
 def is_market_open():
-    now = datetime.now().time()
-    return time(9, 15) <= now <= time(15, 30)
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+
+    if now.weekday() >= 5:  # Saturday, Sunday
+        return False
+
+    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+    return market_open <= now <= market_close
+
 
 # -------------------------------------------------------------------
 # DEBUG ENDPOINT
