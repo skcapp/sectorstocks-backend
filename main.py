@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 import logging
+from datetime import datetime, time
+import pytz
 
 # --------------------------------------------------
 # Logging
@@ -45,9 +47,22 @@ SECTORS = {
 # --------------------------------------------------
 
 
+IST = pytz.timezone("Asia/Kolkata")
+
+
 def market_open():
-    now = datetime.now()
-    return now.weekday() < 5 and now.hour >= 9 and (now.hour < 15 or (now.hour == 15 and now.minute <= 30))
+    now = datetime.now(IST)
+
+    if now.weekday() >= 5:   # Saturday, Sunday
+        return False
+
+    market_start = time(9, 15)
+    market_end = time(15, 30)
+
+    return market_start <= now.time() <= market_end
+
+
+logger.info(f"IST TIME: {datetime.now(IST)}")
 
 
 def get_prev_5min_high(token):
